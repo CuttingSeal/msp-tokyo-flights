@@ -35,9 +35,9 @@ SERPAPI_KEY = os.environ["SERPAPI_KEY"]
 PUSHOVER_USER = os.environ["PUSHOVER_USER_KEY"]
 PUSHOVER_TOKEN = os.environ["PUSHOVER_APP_TOKEN"]
 
-BASE_DEPART = datetime(2026, 3, 18)
+BASE_DEPART = datetime(2026, 5, 18)
 BASE_RETURN = datetime(2026, 6, 3)
-TRIP_LENGTH = (BASE_RETURN - BASE_DEPART).days  # 77 days
+TRIP_LENGTH = (BASE_RETURN - BASE_DEPART).days  # 16 days
 PAX = 2
 
 HISTORY_FILE = Path(__file__).parent / "price_history.json"
@@ -65,6 +65,13 @@ def get_date_combos_for_today():
         ret = dep + timedelta(days=TRIP_LENGTH + return_off)
         combos.append((dep.strftime("%Y-%m-%d"), ret.strftime("%Y-%m-%d")))
     return combos
+
+
+def build_google_flights_url(depart, ret):
+    return (
+        f"https://www.google.com/travel/flights?q=Flights+from+MSP+to+Tokyo"
+        f"+on+{depart}+return+{ret}+{PAX}+passengers"
+    )
 
 
 def search_flights(depart_date, return_date):
@@ -139,6 +146,10 @@ def parse_flight(flight, depart_date, return_date, category):
     outbound_legs = flight.get("flights", [])
     extensions = flight.get("extensions", [])
 
+    # Build a per-flight Google Flights booking link
+    booking_token = flight.get("booking_token", "")
+    flight_link = build_google_flights_url(depart_date, return_date)
+
     return {
         "price_total": total_price,
         "price_per_person": total_price / PAX,
@@ -152,6 +163,7 @@ def parse_flight(flight, depart_date, return_date, category):
         "category": category,
         "search_dates": {"depart": depart_date, "return": return_date},
         "carbon_emissions": flight.get("carbon_emissions", {}),
+        "link": flight_link,
     }
 
 
@@ -189,13 +201,6 @@ def send_pushover(title, message, priority=0, url=None):
     )
     resp.raise_for_status()
     log.info("Pushover notification sent.")
-
-
-def build_google_flights_url(depart, ret):
-    return (
-        f"https://www.google.com/travel/flights?q=Flights+from+MSP+to+Tokyo"
-        f"+on+{depart}+return+{ret}+{PAX}+passengers"
-    )
 
 
 def main():
@@ -248,19 +253,17 @@ def main():
     for i, f in enumerate(top, 1):
         ob = f["outbound"]
         dates = f["search_dates"]
-        ext = f.get("extensions", [])
-        ext_str = " | ".join(ext[:3]) if ext else ""
 
         lines.append(
             f"#{i}  ${f['price_total']:,.0f} total "
             f"(${f['price_per_person']:,.0f}/pp)\n"
+            f"  {f['airlines']}\n"
             f"  {ob.get('origin', 'MSP')}->{ob.get('dest', 'TYO')}  "
             f"{format_duration(f['duration_min'])}  "
-            f"{f['stops']} stop(s)  {f['airlines']}\n"
-            f"  {dates['depart']} -> {dates['return']}"
+            f"{f['stops']} stop(s)\n"
+            f"  {dates['depart']} -> {dates['return']}\n"
+            f"  {f['link']}"
         )
-        if ext_str:
-            lines.append(f"  {ext_str}")
 
     lines.append(
         f"\n{len(all_results)} flights scanned. "
@@ -273,17 +276,12 @@ def main():
 
     message = "\n".join(lines)
 
-    gf_url = build_google_flights_url(
-        best["search_dates"]["depart"],
-        best["search_dates"]["return"],
-    )
-
     priority = 1 if new_low and prev_lowest else 0
     send_pushover(
         f"Flights: ${best['price_total']:,.0f} MSP<->Tokyo ({PAX}pax)",
         message,
         priority=priority,
-        url=gf_url,
+        url=best["link"],
     )
 
     log.info("Best: $%s total. Done.", best["price_total"])
