@@ -1,7 +1,11 @@
 """
-Daily Flight Tracker: MSP → Tokyo (round trip, 2 pax, checked bag, refundable)
+Daily Flight Tracker: MSP → Tokyo (round trip, 2 pax)
 Uses SerpAPI (Google Flights) and sends Pushover notifications.
 Searches 3 date combos/day to stay under the 100/month free tier.
+
+Requirements tracked: refundable, checked bag included, 2 passengers.
+Note: Google Flights doesn't filter by refundable/checked bags directly,
+so the script fetches all results and includes bag pricing info.
 """
 
 import os
@@ -38,9 +42,8 @@ PAX = 2
 
 HISTORY_FILE = Path(__file__).parent / "price_history.json"
 
-# We rotate through date offsets day-by-day to cover the full flex range
-# over the course of a week while only using 3 API calls per day.
-# Day 0: offsets -3, 0, +3    Day 1: -2, +1, +3   etc.
+# Rotate through date offset pairs daily to cover flexibility
+# while using only 3 API calls/day (90/month < 100 free limit).
 DATE_OFFSET_SCHEDULE = [
     [(-3, -3), (0, 0), (3, 3)],
     [(-2, -2), (1, 1), (-3, 0)],
@@ -69,18 +72,18 @@ def search_flights(depart_date, return_date):
     params = {
         "engine": "google_flights",
         "departure_id": "MSP",
-        "arrival_id": "TYO",  # covers NRT + HND
+        "arrival_id": "NRT,HND",  # Tokyo Narita + Haneda explicitly
         "outbound_date": depart_date,
         "return_date": return_date,
         "adults": PAX,
         "currency": "USD",
         "hl": "en",
         "type": "1",  # round trip
-        "bags": "1",  # 1 checked bag per passenger
+        "sort_by": "2",  # sort by price
         "api_key": SERPAPI_KEY,
     }
 
-    log.info("Searching MSP→TYO  %s to %s (%d pax, 1 bag)", depart_date, return_date, PAX)
+    log.info("Searching MSP→Tokyo  %s to %s (%d pax)", depart_date, return_date, PAX)
 
     try:
         search = GoogleSearch(params)
@@ -89,9 +92,12 @@ def search_flights(depart_date, return_date):
         log.error("SerpAPI error: %s", e)
         return []
 
+    if "error" in results:
+        log.warning("SerpAPI returned error: %s", results["error"])
+        return []
+
     flights = []
 
-    # SerpAPI returns "best_flights" and "other_flights"
     for category in ["best_flights", "other_flights"]:
         for flight in results.get(category, []):
             parsed = parse_flight(flight, depart_date, return_date, category)
@@ -108,33 +114,29 @@ def parse_flight(flight, depart_date, return_date, category):
     if price is None:
         return None
 
-    # Price from Google Flights is total for all passengers
-    total_price = price
+    total_price = price  # Google Flights shows total for all passengers
 
     def summarize_legs(legs):
         if not legs:
             return {}
         first = legs[0]
         last = legs[-1]
-        airlines = set()
+        airlines = []
         for leg in legs:
-            airlines.add(leg.get("airline", "??"))
-        dep_info = first.get("departure_airport", {})
-        arr_info = last.get("arrival_airport", {})
+            airline = leg.get("airline", "??")
+            if airline not in airlines:
+                airlines.append(airline)
+        dep_airport = first.get("departure_airport", {})
+        arr_airport = last.get("arrival_airport", {})
         return {
-            "origin": dep_info.get("id", "?"),
-            "dest": arr_info.get("id", "?"),
-            "depart_time": first.get("departure_airport", {}).get("time", ""),
-            "arrive_time": last.get("arrival_airport", {}).get("time", ""),
-            "duration_min": flight.get("total_duration", 0),
-            "stops": len(legs) - 1,
-            "airlines": ", ".join(sorted(airlines)),
+            "origin": dep_airport.get("id", "?"),
+            "dest": arr_airport.get("id", "?"),
+            "depart_time": dep_airport.get("time", ""),
+            "arrive_time": arr_airport.get("time", ""),
+            "airlines": ", ".join(airlines),
         }
 
     outbound_legs = flight.get("flights", [])
-    # For round trips, SerpAPI nests layovers within the flight object
-    # The return flight info may be in a separate structure
-
     extensions = flight.get("extensions", [])
 
     return {
@@ -143,7 +145,9 @@ def parse_flight(flight, depart_date, return_date, category):
         "outbound": summarize_legs(outbound_legs),
         "duration_min": flight.get("total_duration", 0),
         "stops": len(outbound_legs) - 1 if outbound_legs else 0,
-        "airlines": ", ".join(set(l.get("airline", "") for l in outbound_legs)),
+        "airlines": ", ".join(
+            dict.fromkeys(l.get("airline", "") for l in outbound_legs)
+        ),
         "extensions": extensions,
         "category": category,
         "search_dates": {"depart": depart_date, "return": return_date},
@@ -152,7 +156,6 @@ def parse_flight(flight, depart_date, return_date, category):
 
 
 def format_duration(minutes):
-    """Convert minutes to Xh Ym."""
     if not minutes:
         return "?"
     h, m = divmod(int(minutes), 60)
@@ -170,7 +173,6 @@ def save_history(history):
 
 
 def send_pushover(title, message, priority=0, url=None):
-    """Send a push notification via Pushover."""
     data = {
         "token": PUSHOVER_TOKEN,
         "user": PUSHOVER_USER,
@@ -182,15 +184,16 @@ def send_pushover(title, message, priority=0, url=None):
     if url:
         data["url"] = url
         data["url_title"] = "View on Google Flights"
-    resp = requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
+    resp = requests.post(
+        "https://api.pushover.net/1/messages.json", data=data, timeout=15
+    )
     resp.raise_for_status()
     log.info("Pushover notification sent.")
 
 
 def build_google_flights_url(depart, ret):
-    """Build a Google Flights link."""
     return (
-        f"https://www.google.com/travel/flights?q=Flights+from+MSP+to+TYO"
+        f"https://www.google.com/travel/flights?q=Flights+from+MSP+to+Tokyo"
         f"+on+{depart}+return+{ret}+{PAX}+passengers"
     )
 
@@ -208,8 +211,8 @@ def main():
     if not all_results:
         log.warning("No flights found.")
         send_pushover(
-            "Flight Tracker — No Results",
-            "No MSP→Tokyo flights found today. Will retry tomorrow.",
+            "Flight Tracker - No Results",
+            "No MSP to Tokyo flights found today. Will retry tomorrow.",
             priority=-1,
         )
         return
@@ -225,11 +228,13 @@ def main():
     prev_lowest = history.get("lowest_ever")
     new_low = prev_lowest is None or best["price_total"] < prev_lowest
 
-    history["runs"].append({
-        "date": datetime.now().isoformat(),
-        "best_price": best["price_total"],
-        "results_count": len(all_results),
-    })
+    history["runs"].append(
+        {
+            "date": datetime.now().isoformat(),
+            "best_price": best["price_total"],
+            "results_count": len(all_results),
+        }
+    )
     history["runs"] = history["runs"][-90:]
     if new_low:
         history["lowest_ever"] = best["price_total"]
@@ -247,17 +252,24 @@ def main():
         ext_str = " | ".join(ext[:3]) if ext else ""
 
         lines.append(
-            f"#{i}  ${f['price_total']:,.0f} total (${f['price_per_person']:,.0f}/pp)\n"
-            f"  {ob.get('origin','MSP')}→{ob.get('dest','TYO')}  "
+            f"#{i}  ${f['price_total']:,.0f} total "
+            f"(${f['price_per_person']:,.0f}/pp)\n"
+            f"  {ob.get('origin', 'MSP')}->{ob.get('dest', 'TYO')}  "
             f"{format_duration(f['duration_min'])}  "
             f"{f['stops']} stop(s)  {f['airlines']}\n"
-            f"  {dates['depart']} → {dates['return']}"
+            f"  {dates['depart']} -> {dates['return']}"
         )
         if ext_str:
             lines.append(f"  {ext_str}")
 
-    lines.append(f"\nSearched {len(all_results)} flights across {len(date_combos)} date combos.")
-    lines.append(f"Prices include 1 checked bag per person.")
+    lines.append(
+        f"\n{len(all_results)} flights scanned. "
+        f"Prices are for {PAX} pax."
+    )
+    lines.append(
+        "TIP: When booking, add checked bags + "
+        "select refundable fare at checkout."
+    )
 
     message = "\n".join(lines)
 
@@ -268,7 +280,7 @@ def main():
 
     priority = 1 if new_low and prev_lowest else 0
     send_pushover(
-        f"Flights: ${best['price_total']:,.0f} MSP↔Tokyo ({PAX}pax)",
+        f"Flights: ${best['price_total']:,.0f} MSP<->Tokyo ({PAX}pax)",
         message,
         priority=priority,
         url=gf_url,
