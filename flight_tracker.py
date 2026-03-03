@@ -40,6 +40,7 @@ EARLIEST_DEPART = datetime(2026, 5, 15)
 LATEST_RETURN = datetime(2026, 6, 4)
 TRIP_LENGTH = (LATEST_RETURN - BASE_DEPART).days  # 19 days
 PAX = 2
+DEAL_THRESHOLD_PP = 1000  # alert if price per person is at or below this
 
 HISTORY_FILE = Path(__file__).parent / "price_history.json"
 
@@ -289,15 +290,23 @@ def main():
 
     message = "\n".join(lines)
 
-    priority = 1 if new_low and prev_lowest else 0
+    is_deal = best["price_per_person"] <= DEAL_THRESHOLD_PP
+    priority = 1 if (new_low and prev_lowest) or is_deal else 0
+
+    if is_deal:
+        lines.insert(0, f"🔥 DEAL ALERT: ${best['price_per_person']:,.0f}/pp! BOOK NOW!\n")
+        # Emergency priority (requires acknowledgment on phone)
+        priority = 2
+
     send_pushover(
-        f"Flights: ${best['price_total']:,.0f} MSP<->Tokyo ({PAX}pax)",
-        message,
+        f"{'🔥 DEAL ' if is_deal else ''}Flights: ${best['price_total']:,.0f} MSP<->Tokyo ({PAX}pax)",
+        "\n".join(lines) if is_deal else message,
         priority=priority,
         url=best["link"],
     )
 
-    log.info("Best: $%s total. Done.", best["price_total"])
+    log.info("Best: $%s total ($%s/pp). Deal=%s. Done.",
+             best["price_total"], best["price_per_person"], is_deal)
 
 
 if __name__ == "__main__":
