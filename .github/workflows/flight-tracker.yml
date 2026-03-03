@@ -1,0 +1,27 @@
+name: Daily Flight Tracker
+
+on:
+  schedule:
+    # Runs daily at 14:00 UTC (8 AM Central)
+    - cron: '0 14 * * *'
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  check-flights:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run flight tracker
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+        run: python flight_tracker.py
