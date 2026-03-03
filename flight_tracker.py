@@ -104,9 +104,20 @@ def search_flights(depart_date, return_date):
         return []
 
     flights = []
+    MAX_DURATION_MIN = 20 * 60  # 20 hours
 
     for category in ["best_flights", "other_flights"]:
         for flight in results.get(category, []):
+            duration = flight.get("total_duration", 0)
+            if duration > MAX_DURATION_MIN:
+                continue
+            # Check for overnight layovers (layover > 8 hours)
+            layovers = flight.get("layovers", [])
+            has_overnight = any(
+                l.get("duration", 0) > 480 for l in layovers  # 8 hours
+            )
+            if has_overnight:
+                continue
             parsed = parse_flight(flight, depart_date, return_date, category)
             if parsed:
                 flights.append(parsed)
