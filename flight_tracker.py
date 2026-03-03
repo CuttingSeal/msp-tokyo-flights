@@ -210,6 +210,9 @@ def send_pushover(title, message, priority=0, url=None):
     if url:
         data["url"] = url
         data["url_title"] = "View on Google Flights"
+    if priority == 2:
+        data["retry"] = 30  # retry every 30 seconds
+        data["expire"] = 600  # stop after 10 minutes
     resp = requests.post(
         "https://api.pushover.net/1/messages.json", data=data, timeout=15
     )
