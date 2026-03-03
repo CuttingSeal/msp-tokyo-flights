@@ -35,36 +35,38 @@ SERPAPI_KEY = os.environ["SERPAPI_KEY"]
 PUSHOVER_USER = os.environ["PUSHOVER_USER_KEY"]
 PUSHOVER_TOKEN = os.environ["PUSHOVER_APP_TOKEN"]
 
-BASE_DEPART = datetime(2026, 5, 18)
-BASE_RETURN = datetime(2026, 6, 3)
-TRIP_LENGTH = (BASE_RETURN - BASE_DEPART).days  # 16 days
+BASE_DEPART = datetime(2026, 5, 16)  # preferred departure
+EARLIEST_DEPART = datetime(2026, 5, 15)
+LATEST_RETURN = datetime(2026, 6, 4)
+TRIP_LENGTH = (LATEST_RETURN - BASE_DEPART).days  # 19 days
 PAX = 2
 
 HISTORY_FILE = Path(__file__).parent / "price_history.json"
 
-# Rotate through date offset pairs daily to cover flexibility
-# while using only 3 API calls/day (90/month < 100 free limit).
-DATE_OFFSET_SCHEDULE = [
-    [(-3, -3), (0, 0), (3, 3)],
-    [(-2, -2), (1, 1), (-3, 0)],
-    [(-1, -1), (2, 2), (0, 3)],
-    [(-3, -1), (0, 2), (3, 0)],
-    [(0, -3), (-2, 1), (1, -2)],
-    [(-1, 2), (2, -1), (-3, 3)],
-    [(3, -3), (-2, 0), (1, 3)],
-]
+# All valid departure/return combos within the hard boundaries:
+# Depart: May 15–18, Return: June 1–4
+# Rotated 3 per day to stay under SerpAPI free tier.
+def get_all_date_combos():
+    combos = []
+    dep = EARLIEST_DEPART
+    while dep <= BASE_DEPART + timedelta(days=2):  # May 15–18
+        ret = LATEST_RETURN - timedelta(days=3)  # June 1
+        while ret <= LATEST_RETURN:  # through June 4
+            combos.append((dep.strftime("%Y-%m-%d"), ret.strftime("%Y-%m-%d")))
+            ret += timedelta(days=1)
+        dep += timedelta(days=1)
+    return combos
 
 
 def get_date_combos_for_today():
-    """Pick 3 date offset pairs based on the day of year (rotates weekly)."""
-    day_index = datetime.now().timetuple().tm_yday % len(DATE_OFFSET_SCHEDULE)
-    offsets = DATE_OFFSET_SCHEDULE[day_index]
-    combos = []
-    for depart_off, return_off in offsets:
-        dep = BASE_DEPART + timedelta(days=depart_off)
-        ret = dep + timedelta(days=TRIP_LENGTH + return_off)
-        combos.append((dep.strftime("%Y-%m-%d"), ret.strftime("%Y-%m-%d")))
-    return combos
+    """Pick 3 date combos for today, rotating through all valid combos."""
+    all_combos = get_all_date_combos()
+    day_index = datetime.now().timetuple().tm_yday
+    start = (day_index * 3) % len(all_combos)
+    selected = []
+    for i in range(3):
+        selected.append(all_combos[(start + i) % len(all_combos)])
+    return selected
 
 
 def build_google_flights_url(depart, ret):
